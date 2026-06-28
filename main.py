@@ -1,48 +1,29 @@
-import os
-import subprocess
-import json
 from flask import Flask, request, jsonify
+import subprocess
+import os
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Sherlock Cloud Server is Live and Running smoothly!"
-
 @app.route('/search', methods=['GET'])
-def search_username():
-    query = request.args.get('q', '')
-    if not query:
-        return jsonify({"error": "Missing parameter 'q'"}), 400
-
-    print(f"Target Username received: {query}")
-
-    # Run Sherlock CLI inside Render container
+def search():
+    username = request.args.get('q', '').strip()
+    if not username:
+        return jsonify({"results": []})
+    
     try:
-        command = ["sherlock", query, "--json", "output.json", "--timeout", "1"]
-        subprocess.run(command, check=False)
+        # تشغيل شيرلوك مع طلب إخراج النتائج في الشاشة (stdout) مباشرة
+        # وتجاهل أي محاولة للكتابة في ملفات JSON
+        cmd = ["sherlock", username, "--no-color", "--timeout", "3"]
+        result = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
         
-        # Check and parse results
-        output_file = f"{query}.json"
-        if os.path.exists(output_file):
-            with open(output_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Filter and collect only found profile links
-            found_urls = []
-            for site, info in data.items():
-                if info.get("status") == "CLAIMED":
-                    found_urls.append(info.get("url_user"))
-            
-            # Clean up the generated file to save space
-            os.remove(output_file)
-            return jsonify({"results": found_urls})
-            
+        # استخراج السطور التي تحتوي على روابط فقط
+        links = [line.strip() for line in result.splitlines() if "http" in line]
+        
+        return jsonify({"results": links})
+    except Exception as e:
+        # إرجاع الخطأ كقائمة فارغة حتى لا يتعطل التطبيق
         return jsonify({"results": []})
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
