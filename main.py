@@ -6,23 +6,30 @@ app = Flask(__name__)
 
 @app.route('/search', methods=['GET'])
 def search():
-    username = request.args.get('q', '').strip()
+    # استقبال اسم المستخدم وإزالة المسافات لضمان عمل أداة شيرلوك
+    username = request.args.get('q', '').strip().replace(" ", "")
+    
     if not username:
-        return jsonify({"results": ["Missing query"]})
+        return jsonify({"results": ["ERROR: Username empty"]})
     
     try:
-        # تشغيل شيرلوك وتوجيه المخرجات
-        # تأكد من أن الأداة مثبتة في السيرفر عبر requirements.txt (باسم sherlock)
-        result = subprocess.check_output(
-            ["sherlock", username, "--timeout", "5", "--no-color"], 
-            stderr=subprocess.STDOUT, text=True
-        )
+        # استدعاء الأداة عبر python -m sherlock لضمان التشغيل داخل البيئة المترجمة
+        cmd = ["python", "-m", "sherlock", username, "--timeout", "3", "--no-color"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         
-        # استخراج الروابط فقط
-        links = [line.strip() for line in result.splitlines() if "http" in line]
+        # تصفية السطور التي تحتوي على روابط المواقع المكتشفة
+        links = [line.strip() for line in result.stdout.splitlines() if "http" in line]
+        
+        if not links:
+            return jsonify({"results": [f"No accounts found for @{username}"]})
+            
         return jsonify({"results": links})
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({"results": ["ERROR: Scan timeout exceeded"]})
     except Exception as e:
-        return jsonify({"results": ["No match found"]})
+        return jsonify({"results": [f"ERROR: {str(e)}"]})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
