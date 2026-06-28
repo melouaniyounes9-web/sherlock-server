@@ -1,34 +1,51 @@
 from flask import Flask, request, jsonify
-import subprocess
 import os
+import sys
+
+# استيراد شيرلوك برمجياً لضمان العمل داخل Render بدون subprocess
+try:
+    from sherlock.sherlock import Sherlock
+    from sherlock.sites import SitesInformation
+except ImportError:
+    # محاولة إضافة المسار إذا كانت البيئة مختلفة
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'sherlock')))
+    from sherlock import Sherlock
+    from sherlock.sites import SitesInformation
 
 app = Flask(__name__)
 
 @app.route('/search', methods=['GET'])
 def search():
-    # استقبال اسم المستخدم وإزالة المسافات لضمان عمل أداة شيرلوك
+    # تنظيف المدخلات وإزالة الفراغات تماماً
     username = request.args.get('q', '').strip().replace(" ", "")
-    
     if not username:
-        return jsonify({"results": ["ERROR: Username empty"]})
+        return jsonify({"results": ["ERROR: Username cannot be empty"]})
     
     try:
-        # استدعاء الأداة عبر python -m sherlock لضمان التشغيل داخل البيئة المترجمة
-        cmd = ["python", "-m", "sherlock", username, "--timeout", "3", "--no-color"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        # تحميل قائمة المواقع المدعومة من شيرلوك
+        sites = SitesInformation()
         
-        # تصفية السطور التي تحتوي على روابط المواقع المكتشفة
-        links = [line.strip() for line in result.stdout.splitlines() if "http" in line]
+        # إنشاء كائن الفحص وضبط المهلة
+        sherlock = Sherlock(sites)
         
-        if not links:
-            return jsonify({"results": [f"No accounts found for @{username}"]})
+        # تنفيذ الفحص البرمجي المباشر
+        results = sherlock.search(username, timeout=3)
+        
+        # استخراج الروابط المكتشفة بنجاح فقط
+        detected_links = []
+        for site_name, site_data in results.items():
+            if site_data.get('status') == 'CLAIMED': # الحساب موجود
+                url = site_data.get('url_user')
+                if url:
+                    detected_links.append(f"{site_name}: {url}")
+        
+        if not detected_links:
+            return jsonify({"results": [f"No targets found for: {username}"]})
             
-        return jsonify({"results": links})
+        return jsonify({"results": detected_links})
         
-    except subprocess.TimeoutExpired:
-        return jsonify({"results": ["ERROR: Scan timeout exceeded"]})
     except Exception as e:
-        return jsonify({"results": [f"ERROR: {str(e)}"]})
+        return jsonify({"results": [f"SYSTEM_ERROR: {str(e)}"]})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
