@@ -8,22 +8,21 @@ app = Flask(__name__)
 def search():
     username = request.args.get('q', '').strip()
     if not username:
-        return jsonify({"results": []})
+        return jsonify({"results": ["Missing query"]})
     
     try:
-        # تشغيل شيرلوك مع طلب إخراج النتائج في الشاشة (stdout) مباشرة
-        # وتجاهل أي محاولة للكتابة في ملفات JSON
-        cmd = ["sherlock", username, "--no-color", "--timeout", "3"]
-        result = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+        # تشغيل شيرلوك وتوجيه المخرجات
+        # تأكد من أن الأداة مثبتة في السيرفر عبر requirements.txt (باسم sherlock)
+        result = subprocess.check_output(
+            ["sherlock", username, "--timeout", "5", "--no-color"], 
+            stderr=subprocess.STDOUT, text=True
+        )
         
-        # استخراج السطور التي تحتوي على روابط فقط
+        # استخراج الروابط فقط
         links = [line.strip() for line in result.splitlines() if "http" in line]
-        
         return jsonify({"results": links})
     except Exception as e:
-        # إرجاع الخطأ كقائمة فارغة حتى لا يتعطل التطبيق
-        return jsonify({"results": []})
+        return jsonify({"results": ["No match found"]})
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
