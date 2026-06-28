@@ -1,65 +1,48 @@
-from flask import Flask, request
-import subprocess
 import os
+import subprocess
+import json
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-def generate_targets(name_input):
-    # تنظيف المدخلات وتوليد الاحتمالات الذكية للصيغ الثنائية
-    clean_name = name_input.strip().lower()
-    parts = clean_name.split()
-    
-    if len(parts) == 1:
-        p = parts[0]
-        return [p, f"{p}123", f"{p}_pro"]
-    
-    p1, p2 = parts[0], parts[1]
-    return [
-        f"{p1}_{p2}",         
-        f"{p1}.{p2}",         
-        f"{p1}{p2}",          
-        f"{p1}{p2}123"        
-    ]
+@app.route('/')
+def home():
+    return "Sherlock Cloud Server is Live and Running smoothly!"
 
 @app.route('/search', methods=['GET'])
-def search():
-    query = request.args.get('q')
+def search_username():
+    query = request.args.get('q', '')
     if not query:
-        return "Error: Missing parameter 'q'."
-    
-    targets = generate_targets(query)
-    final_results = []
-    
-    for target in targets:
-        try:
-            # تشغيل شيرلوك كأداة نظام مثبتة في الخلفية مباشرة لمنع مشاكل التحذيرات
-            result = subprocess.check_output(
-                ["sherlock", target, "--no-color", "--timeout", "8"], 
-                stderr=subprocess.STDOUT, 
-                text=True
-            )
+        return jsonify({"error": "Missing parameter 'q'"}), 400
+
+    print(f"Target Username received: {query}")
+
+    # Run Sherlock CLI inside Render container
+    try:
+        command = ["sherlock", query, "--json", "output.json", "--timeout", "1"]
+        subprocess.run(command, check=False)
+        
+        # Check and parse results
+        output_file = f"{query}.json"
+        if os.path.exists(output_file):
+            with open(output_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            for line in result.splitlines():
-                if "http" in line and "[+]" in line:
-                    clean_link = line.split(":")[-2] + ":" + line.split(":")[-1]
-                    final_results.append(clean_link.strip())
-                    
-        except subprocess.CalledProcessError as e:
-            if e.output:
-                for line in e.output.splitlines():
-                    if "http" in line and "[+]" in line:
-                        clean_link = line.split(":")[-2] + ":" + line.split(":")[-1]
-                        final_results.append(clean_link.strip())
-        except Exception:
-            pass
+            # Filter and collect only found profile links
+            found_urls = []
+            for site, info in data.items():
+                if info.get("status") == "CLAIMED":
+                    found_urls.append(info.get("url_user"))
             
-    # تنظيف المخرجات وإرسال الروابط النظيفة فقط لتطبيق الأندرويد
-    if final_results:
-        return "\n".join(set(final_results))
-    else:
-        return "[+] Scan complete. No active profiles found."
+            # Clean up the generated file to save space
+            os.remove(output_file)
+            return jsonify({"results": found_urls})
+            
+        return jsonify({"results": []})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # تهيئة المنفذ البرمجي تلقائياً حسب إعدادات خادم Render
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
