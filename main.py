@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import requests
 from bs4 import BeautifulSoup
 from unidecode import unidecode
@@ -8,88 +8,97 @@ import os
 
 app = Flask(__name__)
 
-def generate_true_mutations(raw_input):
-    """تنظيف الحروف المزخرفة وتوليد احتمالات حقيقية متبوعة بأرقام وسنوات شائعة"""
-    # تحويل الحروف مثل hânānē إلى hanane
+def generate_mutations(raw_input):
+    """تحويل الحواف الصوتية المزخرفة وإنشاء احتمالات حقيقية مع اللاحقات الرقمية الشائعة"""
     clean_base = unidecode(raw_input.strip().lower()).replace(" ", "")
-    
+    if not clean_base:
+        return []
+        
     mutations = [clean_base]
+    # أرقام الهوية والسنوات الشائعة جداً في حسابات الأشخاص والمفقودين
+    suffixes = ["123", "99", "2000", "2001", "2002", "2003", "2004", "2005", "_official"]
     
-    # مصفوفة اللاحقات الرقمية الشائعة في أسماء الحسابات
-    common_suffixes = ["123", "12", "99", "2000", "2001", "2002", "2003", "2004", "2005", "_official", "pro"]
-    
-    for suffix in common_suffixes:
-        mutations.append(f"{clean_base}{suffix}")
-        mutations.append(f"{clean_base}_{suffix}")
+    for s in suffixes:
+        mutations.append(f"{clean_base}{s}")
+        mutations.append(f"{clean_base}_{s}")
         
     return list(set(mutations))
 
-def google_dork_scan(target_username):
-    """إجراء بحث حقيقي داخل أرشفة قوقل للمنصات الكبرى لضمان وجود روابط حقيقية 100%"""
-    detected = []
-    # تخصيص البحث لأشهر المنصات التي طلبتها
-    platforms = ["instagram.com", "tiktok.com", "facebook.com", "snapchat.com", "twitter.com"]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+def execute_google_dork(username):
+    """إجراء فحص عميق حقيقي داخل فهرس قوقل لضمان جودة وصحة الروابط"""
+    matched_records = []
+    platforms = {
+        "instagram.com": "Instagram",
+        "tiktok.com": "TikTok",
+        "facebook.com": "Facebook",
+        "twitter.com": "Twitter_X",
+        "reddit.com": "Reddit",
+        "telegram.me": "Telegram",
+        "t.me": "Telegram"
     }
     
-    for platform in platforms:
-        # بناء استعلام حقيقي: site:platform.com "username"
-        query = f"site:{platform} \"{target_username}\""
-        search_url = f"https://www.google.com/search?q={query}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    # بناء الاستعلام المركب للبحث داخل قوقل عن المنصات المستهدفة
+    site_query = " OR ".join([f"site:{p}" for p in platforms.keys()])
+    search_url = f"https://www.google.com/search?q={site_query} \"{username}\""
+    
+    try:
+        response = requests.get(search_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                
+                # التحقق من أن الرابط ينتمي لإحدى المنصات وليس رابطاً داخلياً لقوقل
+                for domain, plat_name in platforms.items():
+                    if domain in href and "google.com" not in href:
+                        clean_url_match = re.search(r'(https?://[^\s&]+)', href)
+                        if clean_url_match:
+                            final_url = clean_url_match.group(1)
+                            
+                            # حساب دقة المطابقة بناءً على احتواء الرابط على النمط البرمجي للاسم
+                            confidence = 90 if username in final_url.lower() else 75
+                            matched_records.append({
+                                "platform": plat_name,
+                                "url": final_url,
+                                "confidence": confidence
+                            })
+    except Exception:
+        pass
         
-        try:
-            response = requests.get(search_url, headers=headers, timeout=7)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                # استخراج الروابط الحقيقية التي تؤدي إلى المنصة المستهدفة فقط
-                for link in soup.find_all('a', href=True):
-                    href = link['href']
-                    if platform in href and "google.com" not in href:
-                        # تنظيف الرابط المستخرج ليكون جاهزاً للضغط
-                        clean_url = re.search(r'(https?://[^\s&]+)', href)
-                        if clean_url:
-                            url_final = clean_url.group(1)
-                            detected.append((platform, url_final))
-        except Exception:
-            pass
-            
-    return detected
+    return matched_records
 
 @app.route('/search', methods=['GET'])
-def search():
-    raw_query = request.args.get('q', '').strip()
-    if not raw_query:
-        return "ERROR: Query context cannot be blank."
+def search_endpoint():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({"results": []})
 
-    # 1. توليد مصفوفة الاحتمالات الحقيقية للأحرف والأرقام
-    target_variants = generate_true_mutations(raw_query)
+    # 1. توليد كافة الاحتمالات الصوتية والرقمية للاسم
+    target_variants = generate_mutations(query)
     
-    final_output = []
-    final_output.append(f"[*] Generated {len(target_variants)} distinct crypto-linguistic variants for target.")
-    final_output.append("[*] Launching Live Google Dorking Matrix across secure nodes...\n")
-
-    # 2. فحص متوازي حقيقي لجميع الاحتمالات عبر قوقل لمنع الحظر والوصول لأعمق أرشفة
-    raw_matches = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(google_dork_scan, target_variants)
-        for res in results:
+    all_results = []
+    
+    # 2. إطلاق فحص متوازي فائق السرعة عبر خيوط المعالجة الـ Threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures_results = executor.map(execute_google_dork, target_variants)
+        for res in futures_results:
             if res:
-                raw_matches.extend(res)
+                all_results.extend(res)
+                
+    # إزالة الروابط المكررة لضمان نظافة ونقاء البيانات المستخرجة
+    seen_urls = set()
+    unique_results = []
+    for item in all_results:
+        if item["url"] not in seen_urls:
+            seen_urls.add(item["url"])
+            unique_results.append(item)
 
-    # إزالة التكرار من الروابط الحقيقية المستخرجة
-    unique_matches = list(set(raw_matches))
-
-    if not unique_matches:
-        return "[-] INTEL: No verified indexed records found on public core networks."
-
-    for platform, url in unique_matches:
-        # حساب نسبة ثقة حقيقية: إذا كان الرابط يحتوي على الاسم النظيف تماماً تكون النسبة أعلى
-        confidence = 95 if raw_query.lower().replace(" ", "") in url.lower() else 75
-        final_output.append(f"[+] VERIFIED TARGET -> {platform}: {url} | CONFIDENCE: {confidence}%")
-
-    return "\n".join(final_output)
+    # إرجاع النتيجة بصيغة JSON مهيكلة للتكامل الكامل مع الداشبورد
+    return jsonify({"results": unique_results})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
